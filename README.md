@@ -6,6 +6,8 @@ An iOS visual language assistant application based on [llama.cpp](https://github
 
 This is a visual language assistant application running on iOS devices, utilizing llama.cpp's iOS library for local inference and MiniCPM-V model for visual language understanding capabilities.
 
+![Demo](demo.PNG)
+
 ## Models Used
 
 This project uses the following model files:
