@@ -1,4 +1,4 @@
-# LLaVA iOS
+# MiniCPM iOS
 
 An iOS visual language assistant application based on [llama.cpp](https://github.com/ggerganov/llama.cpp) and [MiniCPM-V](https://github.com/OpenBMB/MiniCPM-V).
 
