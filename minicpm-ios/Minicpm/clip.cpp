@@ -4,9 +4,9 @@
 // Note: Even when using identical normalized image inputs (see normalize_image_u8_to_f32()) we have a significant difference in resulting embeddings compared to pytorch
 #include "clip.hpp"
 #include "ggml.h"
+#include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "ggml-alloc.h"
-#include "ggml-backend.h"
 
 // #ifdef GGML_USE_CUDA
 // #include "ggml-cuda.h"
@@ -650,7 +650,7 @@ struct clip_ctx
     // memory buffers to evaluate the model
     ggml_backend_buffer_t params_buffer = NULL;
 
-    ggml_backend_t backend = NULL;
+    struct ggml_backend *backend = NULL;  // Changed from ggml_backend_t to struct ggml_backend
     ggml_gallocr_t compute_alloc = NULL;
 
     struct clip_image_size *load_image_size;
@@ -716,9 +716,9 @@ static ggml_cgraph *clip_image_build_graph(clip_ctx *ctx, const clip_image_f32_b
     }
 
     struct ggml_init_params params = {
-        /*.mem_size   =*/ctx->buf_compute_meta.size(),
-        /*.mem_buffer =*/ctx->buf_compute_meta.data(),
-        /*.no_alloc   =*/true,
+        /*.mem_size   =*/ 128*1024*1024,  // Increased to 128MB to accommodate tensor allocation
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ false,
     };
 
     struct ggml_context *ctx0 = ggml_init(params);
@@ -772,9 +772,9 @@ static ggml_cgraph *clip_image_build_graph(clip_ctx *ctx, const clip_image_f32_b
             ggml_set_name(embeddings, "embeddings");
             ggml_set_input(embeddings);
             embeddings = ggml_acc(ctx0, embeddings, model.class_embedding,
-                                  embeddings->nb[1], embeddings->nb[2], embeddings->nb[3], 0);
+                                  embeddings->ne[1], embeddings->ne[2], embeddings->ne[3], 0);
             embeddings = ggml_acc(ctx0, embeddings, inp,
-                                  embeddings->nb[1], embeddings->nb[2], embeddings->nb[3], model.class_embedding->nb[1]);
+                                  embeddings->ne[1], embeddings->ne[2], embeddings->ne[3], model.class_embedding->ne[1]);
         }
     }
 
@@ -877,6 +877,7 @@ static ggml_cgraph *clip_image_build_graph(clip_ctx *ctx, const clip_image_f32_b
             KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
 
             cur = ggml_cont_3d(ctx0, KQV, hidden_size, num_positions, batch_size);
+
         }
 
         // attention output
@@ -990,7 +991,7 @@ static ggml_cgraph *clip_image_build_graph(clip_ctx *ctx, const clip_image_f32_b
             struct ggml_tensor *block_1 = nullptr;
             {
                 // transpose from [1, 576, 2048] --> [1, 2048, 576] --> [1, 2048, 24, 24]
-                mlp_3 = ggml_cont(ctx0, ggml_permute(ctx0, mlp_3, 1, 0, 2, 3));
+                mlp_3 = ggml_cont(ctx0, ggml_permute(ctx0, mlp_3, 1, 2, 0, 3));
                 mlp_3 = ggml_reshape_4d(ctx0, mlp_3, n_patch, n_patch, mlp_3->ne[1], mlp_3->ne[2]);
                 // stride = 1, padding = 1, bias is nullptr
                 block_1 = ggml_conv_2d_dw(ctx0, model.mm_model_block_1_block_0_0_w, mlp_3, 1, 1, 1, 1, 1, 1);
@@ -1017,6 +1018,7 @@ static ggml_cgraph *clip_image_build_graph(clip_ctx *ctx, const clip_image_f32_b
                 block_1 = ggml_mul_mat(ctx0, model.mm_model_block_1_block_1_fc2_w, block_1);
                 block_1 = ggml_add(ctx0, block_1, model.mm_model_block_1_block_1_fc2_b);
                 block_1 = ggml_hardsigmoid(ctx0, block_1);
+
                 // block_1_hw shape = [1, 2048, 24, 24], ne = [24, 24, 2048, 1], block_1 shape = [1, 2048], ne = [2048, 1, 1, 1]
                 block_1 = ggml_reshape_4d(ctx0, block_1, 1, 1, block_1->ne[0], block_1->ne[1]);
                 block_1 = ggml_mul(ctx0, block_1_hw, block_1);
@@ -1025,7 +1027,7 @@ static ggml_cgraph *clip_image_build_graph(clip_ctx *ctx, const clip_image_f32_b
                 block_1 = ggml_reshape_3d(ctx0, block_1, w * h, block_1->ne[2], block_1->ne[3]);
                 block_1 = ggml_cont(ctx0, ggml_permute(ctx0, block_1, 1, 0, 2, 3));
 
-                // block_1 shape = [1, 24*24, 2048], ne = [24*24, 2048, 1]
+                // block_1 shape = [1, 24*24, 2048], ne = [2048, 24*24, 1]
                 block_1 = ggml_mul_mat(ctx0, model.mm_model_block_1_block_2_0_w, block_1);
                 block_1 = ggml_reshape_4d(ctx0, block_1, block_1->ne[0], w, h, block_1->ne[3]);
 
@@ -1213,7 +1215,7 @@ static ggml_cgraph *clip_image_build_graph(clip_ctx *ctx, const clip_image_f32_b
 // read and create ggml_context containing the tensors and their data
 struct clip_ctx *clip_model_load(const char *fname, const int verbosity = 1)
 {
-    struct ggml_context *meta = NULL;
+    struct ggml_context *meta = nullptr;
 
     struct gguf_init_params params = {
         /*.no_alloc = */ true,
@@ -1223,7 +1225,8 @@ struct clip_ctx *clip_model_load(const char *fname, const int verbosity = 1)
     struct gguf_context *ctx = gguf_init_from_file(fname, params);
     if (!ctx)
     {
-        throw std::runtime_error(format("%s: failed to load CLIP model from %s. Does this file exist?\n", __func__, fname));
+        LOG_ERR("%s: failed to load CLIP model from %s. Does this file exist?\n", __func__, fname);
+        return nullptr;
     }
 
     if (verbosity >= 1)
@@ -1232,144 +1235,101 @@ struct clip_ctx *clip_model_load(const char *fname, const int verbosity = 1)
         const int n_kv = gguf_get_n_kv(ctx);
         const int ftype = get_u32(ctx, KEY_FTYPE);
         const std::string ftype_str = get_ftype(ftype);
-        const int idx_desc = get_key_idx(ctx, KEY_DESCRIPTION);
-        const std::string description = gguf_get_val_str(ctx, idx_desc);
-        const int idx_name = gguf_find_key(ctx, KEY_NAME);
-        if (idx_name != -1)
-        { // make name optional temporarily as some of the uploaded models missing it due to a bug
-            const std::string name = gguf_get_val_str(ctx, idx_name);
-            LOG_INF("%s: model name:   %s\n", __func__, name.c_str());
-        }
-        LOG_INF("%s: description:  %s\n", __func__, description.c_str());
-        LOG_INF("%s: GGUF version: %d\n", __func__, gguf_get_version(ctx));
-        LOG_INF("%s: alignment:    %zu\n", __func__, gguf_get_alignment(ctx));
-        LOG_INF("%s: n_tensors:    %d\n", __func__, n_tensors);
-        LOG_INF("%s: n_kv:         %d\n", __func__, n_kv);
-        LOG_INF("%s: ftype:        %s\n", __func__, ftype_str.c_str());
-        LOG_INF("\n");
-    }
-    const int n_tensors = gguf_get_n_tensors(ctx);
-
-    // kv
-    const int n_kv = gguf_get_n_kv(ctx);
-    LOG_INF("%s: loaded meta data with %d key-value pairs and %d tensors from %s\n",
-            __func__, n_kv, n_tensors, fname);
-    {
-        std::map<enum ggml_type, uint32_t> n_type;
-
-        for (int i = 0; i < n_tensors; i++)
-        {
-            enum ggml_type type = gguf_get_tensor_type(ctx, i);
-
-            n_type[type]++;
-        }
-
-        LOG_INF("%s: Dumping metadata keys/values. Note: KV overrides do not apply in this output.\n", __func__);
-        for (int i = 0; i < n_kv; i++)
-        {
-            const char *name = gguf_get_key(ctx, i);
-            const enum gguf_type type = gguf_get_kv_type(ctx, i);
-            const std::string type_name =
-                type == GGUF_TYPE_ARRAY
-                    ? format("%s[%s,%d]", gguf_type_name(type), gguf_type_name(gguf_get_arr_type(ctx, i)), gguf_get_arr_n(ctx, i))
-                    : gguf_type_name(type);
-
-            std::string value = gguf_kv_to_str(ctx, i);
-            const size_t MAX_VALUE_LEN = 40;
-            if (value.size() > MAX_VALUE_LEN)
-            {
-                value = format("%s...", value.substr(0, MAX_VALUE_LEN - 3).c_str());
-            }
-            replace_all(value, "\n", "\\n");
-
-            LOG_INF("%s: - kv %3d: %42s %-16s = %s\n", __func__, i, name, type_name.c_str(), value.c_str());
-        }
-
-        // print type counts
-        for (auto &kv : n_type)
-        {
-            if (kv.second == 0)
-            {
-                continue;
-            }
-
-            LOG_INF("%s: - type %4s: %4d tensors\n", __func__, ggml_type_name(kv.first), kv.second);
-        }
+        LOG_INF("%s: loaded CLIP model with %d tensors, %d key-value pairs (type: %s)\n",
+                __func__, n_tensors, n_kv, ftype_str.c_str());
     }
 
-    // data
-    size_t model_size = 0;
+    // Calculate memory requirements first
+    size_t mem_req = 0;
     {
-        for (int i = 0; i < n_tensors; ++i)
-        {
-            const char *name = gguf_get_tensor_name(ctx, i);
-            const size_t offset = gguf_get_tensor_offset(ctx, i);
-            enum ggml_type type = gguf_get_tensor_type(ctx, i);
-            struct ggml_tensor *cur = ggml_get_tensor(meta, name);
-            size_t tensor_size = ggml_nbytes(cur);
-            model_size += tensor_size;
-            if (verbosity >= 3)
-            {
-                LOG_INF("%s: tensor[%d]: n_dims = %d, name = %s, tensor_size=%zu, offset=%zu, shape:[%" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 "], type = %s\n",
-                        __func__, i, ggml_n_dims(cur), cur->name, tensor_size, offset, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3], ggml_type_name(type));
+        // First pass: calculate total memory required
+        for (int i = 0; i < gguf_get_n_tensors(ctx); ++i) {
+            const char * name = gguf_get_tensor_name(ctx, i);
+            
+            // Get tensor metadata from GGUF
+            struct ggml_tensor * tensor = ggml_get_tensor(meta, name);
+            if (tensor) {
+                mem_req += ggml_nbytes(tensor) + ggml_tensor_overhead();
             }
         }
+
+        // Add extra memory for compute buffers and alignment
+        mem_req += 16*1024*1024; // 16MB for compute
+        mem_req = ((mem_req + 31)/32)*32; // Align to 32 bytes
     }
 
-    clip_ctx *new_clip = new clip_ctx{};
-
-    // update projector type
-    {
-        int idx = gguf_find_key(ctx, KEY_PROJ_TYPE);
-        if (idx != -1)
-        {
-            const std::string proj_type = gguf_get_val_str(ctx, idx);
-            new_clip->proj_type = clip_projector_type_from_string(proj_type);
-        }
-        else
-        {
-            new_clip->proj_type = PROJECTOR_TYPE_MLP;
-        }
-
-        if (new_clip->proj_type == PROJECTOR_TYPE_MLP)
-        {
-            if (gguf_find_tensor(ctx, format(TN_LLAVA_PROJ, 3, "weight").c_str()) != -1)
-            {
-                new_clip->proj_type = PROJECTOR_TYPE_MLP_NORM;
-            }
-        }
+    // Create the actual context with computed size
+    void * ctx_buf = malloc(mem_req);
+    if (!ctx_buf) {
+        LOG_ERR("%s: failed to allocate context buffer\n", __func__);
+        gguf_free(ctx);
+        return nullptr;
     }
 
-    // #ifdef GGML_USE_CUDA
-    //     new_clip->backend = ggml_backend_cuda_init(0);
-    //     LOG_INF("%s: CLIP using CUDA backend\n", __func__);
-    // #endif
-    //
-    // #ifdef GGML_USE_METAL
-    //     new_clip->backend = ggml_backend_metal_init();
-    //     LOG_INF("%s: CLIP using Metal backend\n", __func__);
-    // #endif
-    //
-    // #ifdef GGML_USE_CANN
-    //     new_clip->backend = ggml_backend_cann_init(0);
-    //     LOG_INF("%s: CLIP using CANN backend\n", __func__);
-    // #endif
-    //
-    // #ifdef GGML_USE_VULKAN
-    //     new_clip->backend = ggml_backend_vk_init(0);
-    //     LOG_INF("%s: CLIP using Vulkan backend\n", __func__);
-    // #endif
-    //
-    // #ifdef GGML_USE_SYCL
-    //     new_clip->backend = ggml_backend_sycl_init(0);
-    //     LOG_INF("%s: CLIP using SYCL backend\n", __func__);
-    // #endif
+    struct ggml_init_params ctx_params;
+    ctx_params.mem_size   = mem_req;
+    ctx_params.mem_buffer = ctx_buf;
+    ctx_params.no_alloc   = false;  // Allow allocation
 
-    if (!new_clip->backend)
-    {
-        new_clip->backend = ggml_backend_cpu_init();
-        LOG_INF("%s: CLIP using CPU backend\n", __func__);
+    struct ggml_context * ctx_data = ggml_init(ctx_params);
+    if (!ctx_data) {
+        LOG_ERR("%s: failed to create context\n", __func__);
+        free(ctx_buf);
+        gguf_free(ctx);
+        return nullptr;
     }
+
+    clip_ctx * new_clip = new clip_ctx;
+    new_clip->ctx_gguf = ctx;
+    new_clip->ctx_data = ctx_data;
+
+    // Create tensors and copy data
+    bool success = true;
+    for (int i = 0; i < gguf_get_n_tensors(ctx); ++i) {
+        const char * name = gguf_get_tensor_name(ctx, i);
+        
+        // Get tensor metadata from GGUF
+        struct ggml_tensor * tensor = ggml_get_tensor(ctx_data, name);
+        if (!tensor) {
+            LOG_ERR("%s: failed to get tensor '%s'\n", __func__, name);
+            success = false;
+            break;
+        }
+
+        // Copy data
+        const size_t offset = gguf_get_data_offset(ctx) + gguf_get_tensor_offset(ctx, i);
+        const void * data = (const uint8_t *)gguf_get_data(ctx) + offset;
+        memcpy(tensor->data, data, ggml_nbytes(tensor));
+    }
+
+    if (!success) {
+        clip_free(new_clip);
+//        gguf_free(ctx);
+        return nullptr;
+    }
+
+    // Initialize backend
+    struct ggml_backend* backend = nullptr;
+    #if TARGET_OS_SIMULATOR
+        // Force CPU on simulator
+        fprintf(stderr, "Running on simulator, forcing CPU backend\n");
+        backend = ggml_backend_cpu_init();
+    #else
+        backend = ggml_backend_cpu_init();
+        if (!backend) {
+            fprintf(stderr, "Failed to initialize CPU backend\n");
+            return nullptr;
+        }
+    #endif
+
+    if (!backend) {
+        fprintf(stderr, "Failed to initialize backend\n");
+        clip_free(new_clip);
+        gguf_free(ctx);
+        return nullptr;
+    }
+
+    new_clip->backend = backend;
 
     // model size and capabilities
     {
@@ -1426,79 +1386,24 @@ struct clip_ctx *clip_model_load(const char *fname, const int verbosity = 1)
             LOG_INF("%s: vision_encoder: %d\n", __func__, new_clip->has_vision_encoder);
             LOG_INF("%s: llava_projector:  %d\n", __func__, new_clip->has_llava_projector);
             LOG_INF("%s: minicpmv_projector:  %d\n", __func__, new_clip->has_minicpmv_projector);
-            LOG_INF("%s: model size:     %.2f MB\n", __func__, model_size / 1024.0 / 1024.0);
-            LOG_INF("%s: metadata size:  %.2f MB\n", __func__, ggml_get_mem_size(meta) / 1024.0 / 1024.0);
+            LOG_INF("%s: model size:     %.2f MB\n", __func__, ggml_get_mem_size(ctx_data) / 1024.0 / 1024.0);
         }
     }
 
-    LOG_INF("%s: params backend buffer size = % 6.2f MB (%i tensors)\n", __func__, model_size / (1024.0 * 1024.0), n_tensors);
+    LOG_INF("%s: params backend buffer size = % 6.2f MB (%i tensors)\n", __func__, ggml_get_mem_size(ctx_data) / (1024.0 * 1024.0), gguf_get_n_tensors(ctx));
 
     // load tensors
     {
-        std::vector<uint8_t> read_buf;
-        struct ggml_init_params params = {
-            /*.mem_size =*/(n_tensors + 1) * ggml_tensor_overhead(),
-            /*.mem_buffer =*/NULL,
-            /*.no_alloc =*/true,
-        };
-
-        new_clip->ctx_data = ggml_init(params);
-        if (!new_clip->ctx_data)
-        {
-            LOG_ERR("%s: ggml_init() failed\n", __func__);
-            clip_free(new_clip);
-            gguf_free(ctx);
-            return nullptr;
-        }
-
-        auto fin = std::ifstream(fname, std::ios::binary);
-        if (!fin)
-        {
-            LOG_ERR("cannot open model file for loading tensors\n");
-            clip_free(new_clip);
-            gguf_free(ctx);
-            return nullptr;
-        }
-
-        // add tensors to context
-        for (int i = 0; i < n_tensors; ++i)
-        {
-            const char *name = gguf_get_tensor_name(ctx, i);
-            struct ggml_tensor *t = ggml_get_tensor(meta, name);
-            struct ggml_tensor *cur = ggml_dup_tensor(new_clip->ctx_data, t);
-            ggml_set_name(cur, name);
-        }
-
-        // alloc memory and offload data
-        new_clip->params_buffer = ggml_backend_alloc_ctx_tensors(new_clip->ctx_data, new_clip->backend);
-        for (int i = 0; i < n_tensors; ++i)
-        {
-            const char *name = gguf_get_tensor_name(ctx, i);
-            struct ggml_tensor *cur = ggml_get_tensor(new_clip->ctx_data, name);
-            const size_t offset = gguf_get_data_offset(ctx) + gguf_get_tensor_offset(ctx, i);
-            fin.seekg(offset, std::ios::beg);
-            if (!fin)
-            {
-                LOG_ERR("%s: failed to seek for tensor %s\n", __func__, name);
-                clip_free(new_clip);
-                gguf_free(ctx);
-                return nullptr;
-            }
-            int num_bytes = ggml_nbytes(cur);
-            if (ggml_backend_buffer_is_host(new_clip->params_buffer))
-            {
-                // for the CPU and Metal backend, we can read directly into the tensor
-                fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
-            }
-            else
-            {
-                // read into a temporary buffer first, then copy to device memory
-                read_buf.resize(num_bytes);
-                fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
-                ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
-            }
-        }
-        fin.close();
+        // Pre-allocate compute buffer with same size
+        new_clip->buf_compute_meta.resize(128*1024*1024);  // 128MB for compute buffer
+        new_clip->compute_alloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(new_clip->backend));
+        clip_image_f32_batch batch;
+        batch.size = 1;
+        batch.data = nullptr;
+        ggml_cgraph *gf = clip_image_build_graph(new_clip, &batch, nullptr, false);
+        ggml_gallocr_reserve(new_clip->compute_alloc, gf);
+        size_t compute_memory_buffer_size = ggml_gallocr_get_buffer_size(new_clip->compute_alloc, 0);
+        LOG_INF("%s: compute allocated memory: %.2f MB\n", __func__, compute_memory_buffer_size / 1024.0 / 1024.0);
     }
 
     // vision model
@@ -1794,21 +1699,6 @@ struct clip_ctx *clip_model_load(const char *fname, const int verbosity = 1)
     }
 
     ggml_free(meta);
-
-    new_clip->ctx_gguf = ctx;
-
-    // measure mem requirement and allocate
-    {
-        new_clip->buf_compute_meta.resize(GGML_DEFAULT_GRAPH_SIZE * ggml_tensor_overhead() + ggml_graph_overhead());
-        new_clip->compute_alloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(new_clip->backend));
-        clip_image_f32_batch batch;
-        batch.size = 1;
-        batch.data = nullptr;
-        ggml_cgraph *gf = clip_image_build_graph(new_clip, &batch, nullptr, false);
-        ggml_gallocr_reserve(new_clip->compute_alloc, gf);
-        size_t compute_memory_buffer_size = ggml_gallocr_get_buffer_size(new_clip->compute_alloc, 0);
-        LOG_INF("%s: compute allocated memory: %.2f MB\n", __func__, compute_memory_buffer_size / 1024.0 / 1024.0);
-    }
 
     return new_clip;
 }
@@ -2177,7 +2067,7 @@ static std::pair<int, int> uhd_get_refine_size(std::pair<int, int> original_size
     int best_grid_width, best_grid_height;
     std::tie(best_grid_width, best_grid_height) = best_grid_size;
 
-    //  std::pair<int, int> refine_size = std::make_tuple(best_grid_width * grid_x, best_grid_height * grid_y); (old line)
+    // std::pair<int, int> refine_size = std::make_tuple(best_grid_width * grid_x, best_grid_height * grid_y); (old line)
     std::pair<int, int> refine_size = std::make_pair(best_grid_width * grid_x, best_grid_height * grid_y); // (new line)
     return refine_size;
 }
@@ -2253,7 +2143,6 @@ static std::vector<std::vector<clip_image_u8 *>> uhd_slice_image(const clip_imag
         clip_image_u8 *source_image = clip_image_u8_init();
         bicubic_resize(*img, *source_image, best_size.first, best_size.second);
         // source_image = image.copy().resize(best_resize, Image.Resampling.BICUBIC)
-        LOG_INF("%s: image_size: %d %d; source_image size: %d %d\n", __func__, img->nx, img->ny, best_size.first, best_size.second);
         images[images.size() - 1].push_back(source_image);
 
         std::pair<int, int> best_grid = uhd_best_grid(max_slice_nums, multiple, log_ratio);
@@ -2388,6 +2277,7 @@ bool clip_image_preprocess(struct clip_ctx *ctx, const clip_image_u8 *img, clip_
         temp->nx = longer_side;
         temp->ny = longer_side;
         temp->buf.resize(3 * longer_side * longer_side);
+
         const uint8_t bc[3] = {122, 116, 104}; // background color in RGB from LLaVA (this is the mean rgb color * 255)
 
         // fill with background color
@@ -2466,7 +2356,6 @@ bool clip_image_preprocess(struct clip_ctx *ctx, const clip_image_u8 *img, clip_
             memcpy(temp->buf.data(), img->buf.data(), temp->buf.size());
         }
     }
-
     const int nx = temp->nx;
     const int ny = temp->ny;
     // clip_image_save_to_bmp(*temp, "resized_vanilla.bmp");
@@ -2693,7 +2582,7 @@ static std::vector<std::vector<std::vector<float>>> get_2d_sincos_pos_embed_from
     return emb;
 }
 
-static std::vector<std::vector<float>> get_2d_sincos_pos_embed(int embed_dim, const std::pair<int, int> image_size)
+static std::vector<std::vector<float>> get_2d_sincos_pos_embed(int embed_dim, const std::pair<int, int> &image_size)
 {
     int grid_h_size = image_size.first;
     int grid_w_size = image_size.second;
@@ -2841,6 +2730,7 @@ bool clip_image_batch_encode(clip_ctx *ctx, const int n_threads, const clip_imag
             //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit
             //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit/blob/d66538faeba44480d0bfaa42145eef26f9423199/modeling_siglip.py#L316
             struct ggml_tensor *positions = ggml_graph_get_tensor(gf, "positions");
+
             int *positions_data = (int *)malloc(ggml_nbytes(positions));
             int bucket_coords_h[70];
             int bucket_coords_w[70];
@@ -2925,8 +2815,8 @@ bool clip_image_batch_encode(clip_ctx *ctx, const int n_threads, const clip_imag
                         {
                             positions_data[ptr] = y + dy;
                             positions_data[num_patches + ptr] = x + dx;
-                            positions_data[num_patches * 2 + ptr] = y + dy;
-                            positions_data[num_patches * 3 + ptr] = x + dx;
+                            positions_data[num_patches + ptr] = y + dy;
+                            positions_data[num_patches + ptr] = x + dx;
                             ptr++;
                         }
                     }
@@ -2998,16 +2888,14 @@ bool clip_model_quantize(const char *fname_inp, const char *fname_out, const int
 
     const int n_tensors = gguf_get_n_tensors(ctx_src);
 
-    for (int i = 0; i < n_tensors; ++i)
-    {
-        const char *name = gguf_get_tensor_name(ctx_src, i);
-        struct ggml_tensor *cur = ggml_get_tensor(ctx_data, name);
+    for (int i = 0; i < n_tensors; ++i) {
+        const char * name = gguf_get_tensor_name(ctx_src, i);
+        struct ggml_tensor * cur = ggml_get_tensor(ctx_data, name);
         gguf_add_tensor(ctx_out, cur);
     }
 
     const size_t meta_size = gguf_get_meta_size(ctx_out);
-    for (size_t i = 0; i < meta_size; ++i)
-    {
+    for (size_t i = 0; i < meta_size; ++i) {
         fout.put(0);
     }
 
@@ -3021,8 +2909,7 @@ bool clip_model_quantize(const char *fname_inp, const char *fname_out, const int
     size_t total_size_org = 0;
     size_t total_size_new = 0;
 
-    for (int i = 0; i < n_tensors; ++i)
-    {
+    for (int i = 0; i < n_tensors; ++i) {
         const std::string name = gguf_get_tensor_name(ctx_src, i);
         struct ggml_tensor *cur = ggml_get_tensor(ctx_data, name.c_str());
 
@@ -3031,10 +2918,8 @@ bool clip_model_quantize(const char *fname_inp, const char *fname_out, const int
         size_t new_size;
 
         bool quantize = false;
-        for (const auto &s : k_names)
-        {
-            if (std::regex_match(name, std::regex(s)))
-            {
+        for (const auto &s : k_names) {
+            if (std::regex_match(name, std::regex(s))) {
                 quantize = true;
                 break;
             }
@@ -3043,49 +2928,41 @@ bool clip_model_quantize(const char *fname_inp, const char *fname_out, const int
         // quantize only 2D tensors
         quantize &= (ggml_n_dims(cur) == 2);
 
-        if (quantize)
-        {
+        if (quantize) {
             new_type = type;
-            if (new_type >= GGML_TYPE_Q2_K && name.find("embd") != std::string::npos)
-            {
+            if (new_type >= GGML_TYPE_Q2_K && name.find("embd") != std::string::npos) {
                 new_type = GGML_TYPE_Q8_0; // ggml_get_rows needs non K type
                 // LOG_ERR("%s: quantizing %s to %s\n", __func__, name.c_str(), ggml_type_name(new_type));
             }
             const size_t n_elms = ggml_nelements(cur);
             float *f32_data;
 
-            switch (cur->type)
-            {
-            case GGML_TYPE_F32:
-                f32_data = (float *)cur->data;
-                break;
-            case GGML_TYPE_F16:
-                if (conv_buf.size() < n_elms)
-                {
-                    conv_buf.resize(n_elms);
-                }
-                for (size_t j = 0; j < n_elms; ++j)
-                {
-                    conv_buf[j] = ggml_fp16_to_fp32(((ggml_fp16_t *)cur->data)[j]);
-                }
-                f32_data = (float *)conv_buf.data();
-                break;
-            default:
-                LOG_ERR("Please use an input file in f32 or f16\n");
-                gguf_free(ctx_out);
-                return false;
+            switch (cur->type) {
+                case GGML_TYPE_F32:
+                    f32_data = (float *)cur->data;
+                    break;
+                case GGML_TYPE_F16:
+                    if (conv_buf.size() < n_elms) {
+                        conv_buf.resize(n_elms);
+                    }
+                    for (size_t j = 0; j < n_elms; ++j) {
+                        conv_buf[j] = ggml_fp16_to_fp32(((ggml_fp16_t *)cur->data)[j]);
+                    }
+                    f32_data = (float *)conv_buf.data();
+                    break;
+                default:
+                    LOG_ERR("Please use an input file in f32 or f16\n");
+                    gguf_free(ctx_out);
+                    return false;
             }
 
-            if (work.size() < n_elms * 4)
-            {
+            if (work.size() < n_elms * 4) {
                 work.resize(n_elms * 4);
             }
             new_data = work.data();
 
             new_size = ggml_quantize_chunk(new_type, f32_data, new_data, 0, n_elms / cur->ne[0], cur->ne[0], nullptr);
-        }
-        else
-        {
+        } else {
             new_type = cur->type;
             new_data = cur->data;
             new_size = ggml_nbytes(cur);
@@ -3097,8 +2974,7 @@ bool clip_model_quantize(const char *fname_inp, const char *fname_out, const int
         gguf_set_tensor_data(ctx_out, name.c_str(), new_data, new_size);
         fout.write((const char *)new_data, new_size);
         size_t pad = GGML_PAD(new_size, gguf_get_alignment(ctx_out)) - new_size;
-        for (size_t j = 0; j < pad; ++j)
-        {
+        for (size_t j = 0; j < pad; ++j) {
             fout.put(0);
         }
 

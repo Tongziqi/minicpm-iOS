@@ -7,8 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		200BD2702D1DB4C800335E1B /* ggml-model-Q2_K.gguf in Resources */ = {isa = PBXBuildFile; fileRef = 200BD26D2D1DB4C800335E1B /* ggml-model-Q2_K.gguf */; };
-		200BD2742D1E44F100335E1B /* mmproj-model-f16.gguf in Resources */ = {isa = PBXBuildFile; fileRef = 200BD2732D1E44F100335E1B /* mmproj-model-f16.gguf */; };
+		206F130E2D39FBBB00800CE5 /* Model-7.6B-Q4_K_S.gguf in Resources */ = {isa = PBXBuildFile; fileRef = 206F130C2D39FBBB00800CE5 /* Model-7.6B-Q4_K_S.gguf */; };
+		206F130F2D39FBBB00800CE5 /* Model-7.6B-Q4_K_S_mmproj-model-f16.gguf in Resources */ = {isa = PBXBuildFile; fileRef = 206F130D2D39FBBB00800CE5 /* Model-7.6B-Q4_K_S_mmproj-model-f16.gguf */; };
+		206F13122D3A310A00800CE5 /* MinicpmInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206F13112D3A310A00800CE5 /* MinicpmInterface.swift */; };
 		640144EE2B6D9C3E004E9B6F /* llava_iosApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640144ED2B6D9C3E004E9B6F /* llava_iosApp.swift */; };
 		640144F02B6D9C3E004E9B6F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640144EF2B6D9C3E004E9B6F /* ContentView.swift */; };
 		640144F22B6D9C3F004E9B6F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 640144F12B6D9C3F004E9B6F /* Assets.xcassets */; };
@@ -61,10 +62,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		200BD26D2D1DB4C800335E1B /* ggml-model-Q2_K.gguf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "ggml-model-Q2_K.gguf"; sourceTree = "<group>"; };
-		200BD2732D1E44F100335E1B /* mmproj-model-f16.gguf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "mmproj-model-f16.gguf"; sourceTree = "<group>"; };
 		200BD30F2D1E9D2400335E1B /* clip.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = clip.hpp; sourceTree = "<group>"; };
 		200BD3102D1E9D2400335E1B /* llava.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = llava.hpp; sourceTree = "<group>"; };
+		206F130C2D39FBBB00800CE5 /* Model-7.6B-Q4_K_S.gguf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Model-7.6B-Q4_K_S.gguf"; sourceTree = "<group>"; };
+		206F130D2D39FBBB00800CE5 /* Model-7.6B-Q4_K_S_mmproj-model-f16.gguf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Model-7.6B-Q4_K_S_mmproj-model-f16.gguf"; sourceTree = "<group>"; };
+		206F13102D3A310A00800CE5 /* minicpm-ios-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "minicpm-ios-Bridging-Header.h"; sourceTree = "<group>"; };
+		206F13112D3A310A00800CE5 /* MinicpmInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinicpmInterface.swift; sourceTree = "<group>"; };
 		640144EA2B6D9C3E004E9B6F /* minicpm-ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "minicpm-ios.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		640144ED2B6D9C3E004E9B6F /* llava_iosApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = llava_iosApp.swift; sourceTree = "<group>"; };
 		640144EF2B6D9C3E004E9B6F /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -187,14 +190,16 @@
 		640144EC2B6D9C3E004E9B6F /* minicpm-ios */ = {
 			isa = PBXGroup;
 			children = (
+				206F130C2D39FBBB00800CE5 /* Model-7.6B-Q4_K_S.gguf */,
+				206F130D2D39FBBB00800CE5 /* Model-7.6B-Q4_K_S_mmproj-model-f16.gguf */,
 				648FBE1D2B7C6D060069ED0E /* minicpm-ios.entitlements */,
-				200BD2732D1E44F100335E1B /* mmproj-model-f16.gguf */,
-				200BD26D2D1DB4C800335E1B /* ggml-model-Q2_K.gguf */,
 				648FBE102B7C58610069ED0E /* Minicpm */,
 				6437ED9C2B794ED300DC163F /* Models */,
 				6437ED972B794E6900DC163F /* UI */,
 				640144ED2B6D9C3E004E9B6F /* llava_iosApp.swift */,
 				640144EF2B6D9C3E004E9B6F /* ContentView.swift */,
+				206F13102D3A310A00800CE5 /* minicpm-ios-Bridging-Header.h */,
+				206F13112D3A310A00800CE5 /* MinicpmInterface.swift */,
 				640144F12B6D9C3F004E9B6F /* Assets.xcassets */,
 				640144F32B6D9C3F004E9B6F /* Preview Content */,
 				6437EDA02B794FEC00DC163F /* AppModel.xcdatamodeld */,
@@ -390,9 +395,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				206F130E2D39FBBB00800CE5 /* Model-7.6B-Q4_K_S.gguf in Resources */,
+				206F130F2D39FBBB00800CE5 /* Model-7.6B-Q4_K_S_mmproj-model-f16.gguf in Resources */,
 				640144F52B6D9C3F004E9B6F /* Preview Assets.xcassets in Resources */,
-				200BD2742D1E44F100335E1B /* mmproj-model-f16.gguf in Resources */,
-				200BD2702D1DB4C800335E1B /* ggml-model-Q2_K.gguf in Resources */,
 				640144F22B6D9C3F004E9B6F /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -435,6 +440,7 @@
 				64A120852BD7E183002E1763 /* ThumbnailView.swift in Sources */,
 				6437EDA22B794FEC00DC163F /* AppModel.xcdatamodeld in Sources */,
 				645E6FEC2BBCFE3400269118 /* ViewfinderView.swift in Sources */,
+				206F13122D3A310A00800CE5 /* MinicpmInterface.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

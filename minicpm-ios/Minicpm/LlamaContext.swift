@@ -95,11 +95,11 @@ actor LlamaContext {
             clip_model_load(clipPath, 1)
         }
         
-        let n_threads = max(1, min(8, ProcessInfo.processInfo.processorCount - 2))
+        let n_threads = max(1, min(4, ProcessInfo.processInfo.processorCount - 1))
         print("Using \(n_threads) threads")
         
         var ctx_params = llama_context_default_params()
-        ctx_params.n_ctx = 4096  // Match CLI context size
+        ctx_params.n_ctx = 2048  // Reduced context size for iOS
         ctx_params.n_threads = Int32(n_threads)
         ctx_params.n_threads_batch = Int32(n_threads)
         
@@ -148,42 +148,50 @@ actor LlamaContext {
             let size = Int32(myBytes.count)
             print("Processing image with size: \(size) bytes")
             
-            // Clear batch and KV cache before processing image
-            llama_batch_clear(&batch)
-            llama_kv_cache_clear(ctx)
-            
             let success = myBytes.withUnsafeMutableBytes { raw in
                 sampling_ctx.embedImage(raw.baseAddress, withSize: size, clipContext: clip_ctx)
             }
             print("Image embedding success: \(success)")
             
-            // Add logging for batch status after image embedding
-            print("Current batch status:")
-            print("- Number of tokens: \(batch.n_tokens)")
+            // Verify batch status after image embedding
             if batch.n_tokens > 0 {
-                // Ensure all tokens have logits enabled
+                // Enable logits for all tokens
                 for i in 0..<Int(batch.n_tokens) {
                     batch.logits[i] = 1
                 }
-                print("- All token logits enabled")
-                print("- Last token logits enabled: \(batch.logits[Int(batch.n_tokens - 1)])")
-            }
-            
-            // Evaluate the batch if we have tokens
-            if batch.n_tokens > 0 {
-                if llama_decode(ctx, batch) != 0 {
-                    print("Error: Failed to decode batch")
+                
+                // Evaluate the batch in smaller chunks
+                let chunkSize = 32
+                var processedTokens = 0
+                
+                while processedTokens < batch.n_tokens {
+                    let remainingTokens = Int(batch.n_tokens) - processedTokens
+                    let currentChunkSize = min(chunkSize, remainingTokens)
+                    
+                    var tempBatch = llama_batch_init(Int32(currentChunkSize), 0, 1)
+                    defer { llama_batch_free(tempBatch) }
+                    
+                    // Copy tokens to temp batch
+                    for i in 0..<currentChunkSize {
+                        let srcIdx = processedTokens + i
+                        tempBatch.token[i] = batch.token[srcIdx]
+                        tempBatch.pos[i] = batch.pos[srcIdx]
+                        tempBatch.n_seq_id[i] = batch.n_seq_id[srcIdx]
+                        tempBatch.logits[i] = 1
+                        tempBatch.n_tokens += 1
+                    }
+                    
+                    if llama_decode(ctx, tempBatch) != 0 {
+                        print("Error: Failed to decode batch chunk")
+                    }
+                    
+                    processedTokens += currentChunkSize
                 }
             }
         }
         
         // Initialize sampling context with the new input
-        sampling_ctx.evaluateString("\(text)\(userPromptPostfix)", batchSize: 2048, addBos: false)
-        
-        // Ensure the last token has logits enabled
-        if batch.n_tokens > 0 {
-            batch.logits[Int(batch.n_tokens - 1)] = 1
-        }
+        sampling_ctx.evaluateString("\(text)\(userPromptPostfix)", batchSize: 512, addBos: false)
     }
     
     func completion_loop() async throws -> String {

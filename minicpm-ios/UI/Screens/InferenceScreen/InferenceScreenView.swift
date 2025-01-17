@@ -12,7 +12,6 @@ struct InferenceScreenView: View {
     @StateObject var appstate: AppState
     @State private var cameraModel: CameraDataModel
     @State private var showingImagePicker = false
-    @State private var showingActionSheet = false
     @State private var selectedImage: UIImage?
     @State private var sourceType: UIImagePickerController.SourceType = .photoLibrary
     @State private var isInferencing = false
@@ -48,8 +47,25 @@ struct InferenceScreenView: View {
             
             // 按钮区域
             HStack(spacing: 20) {
-                Button("Select Image") {
-                    showingActionSheet = true
+                Menu {
+                    Button(action: {
+                        sourceType = .camera
+                        clearResults()
+                        showingImagePicker = true
+                    }) {
+                        Label("Camera", systemImage: "camera")
+                    }
+                    
+                    Button(action: {
+                        sourceType = .photoLibrary
+                        clearResults()
+                        showingImagePicker = true
+                    }) {
+                        Label("Photo Library", systemImage: "photo")
+                    }
+                } label: {
+                    Text("Select Image")
+                        .frame(minWidth: 100)
                 }
                 .disabled(isInferencing)
                 
@@ -104,21 +120,6 @@ struct InferenceScreenView: View {
         .padding()
         .sheet(isPresented: $showingImagePicker) {
             ImagePicker(image: $selectedImage, sourceType: sourceType)
-        }
-        .actionSheet(isPresented: $showingActionSheet) {
-            ActionSheet(title: Text("Select Image Source"), buttons: [
-                .default(Text("Camera")) {
-                    sourceType = .camera
-                    clearResults()
-                    showingImagePicker = true
-                },
-                .default(Text("Photo Library")) {
-                    sourceType = .photoLibrary
-                    clearResults()
-                    showingImagePicker = true
-                },
-                .cancel()
-            ])
         }
         .onChange(of: selectedImage) { _ in
             clearResults()
